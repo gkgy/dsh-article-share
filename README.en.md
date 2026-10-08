@@ -24,7 +24,7 @@ Import → Source / rendered preview → Edit platform content → Local images
 | Markdown | Import a file or paste text; switch between source and rendered preview |
 | Word `.docx` | Extract headings, bold text, lists, links, tables, and supported embedded images |
 | PDF | Extract readable text; scanned documents show an OCR-required message |
-| Zhihu | Prepare the title, rich text, and images in the column article editor |
+| Zhihu | Prepare the title, rich text, images, and a separate article cover in the column editor |
 | X threads | Preserve the full text, split and number posts within 280 weighted characters, and keep links and emoji intact |
 | X Articles | Full-length article mode, requiring the corresponding account access |
 | Local images | Integrate an existing Qwen Image / ComfyUI setup and local media scheduler |
@@ -72,9 +72,12 @@ The current adapter depends on `media-runner.js`, `media-mutex.js`, `startup-rec
 
 Set environment variables in the environment that launches DSH. Image generation waits until the chat model is idle, releases it during generation, then unloads the image model and restores the chat model. Closing the panel does not cancel a job; you can check it again or cancel it explicitly.
 
+Zhihu preparation automatically generates a missing local cover or reuses an existing one, then uploads it through the separate cover input in publication settings. Final confirmation requires a verified cover thumbnail. If the cover changes or disappears, prepare the draft again.
+
 ## Verification and limitations
 
-- Eight automated tests passed, covering document conversion, full-text thread splitting, links, and character-count boundaries.
+- Eleven automated tests passed, covering document conversion, full-text thread splitting, links, and character-count boundaries.
+- 2026-10-09: Verified automatic upload of the separate Zhihu cover through DSH → Chrome, with the cover retained after a draft reload. The article was not publicly submitted again.
 - Word / PDF import and Markdown source / rendered-preview switching were verified in the actual DSH interface.
 - Zhihu rich-text drafts and image uploads, and a 12-post X thread with an image attached to the first post, were verified in signed-in Chrome. Testing stopped before final confirmation.
 - Local Qwen image generation and image insertion succeeded in the development environment. Other devices must configure the dependencies above.

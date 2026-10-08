@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {randomUUID,createHash} from 'node:crypto';
 import {homedir} from 'node:os';
 import {convert,tweetLength,splitThread} from './core.js';
+import {isCoverImage,prepareZhihuCover,zhihuCoverSource} from './zhihu-cover.js';
 const root=dirname(fileURLToPath(import.meta.url));
 const chromePortFile=join(homedir(),'Library','Application Support','Google','Chrome','DevToolsActivePort');
 const ownedPages=new Map();
@@ -105,7 +106,7 @@ async function prepareXArticle(page,input,paths){
  }
  return {status:'ready',kind:'article',url:page.url(),title:article.title,bodyDigest:createHash('sha256').update(await fields.body.innerText()).digest('hex'),images:paths.length,account:'请核对浏览器中的 X 账号与文章受众'};
 }
-async function prepareZhihu(page,input,paths){
+async function prepareZhihu(page,input,paths,coverPath){
  const title=await waitEditor(page,'zhihu');const article=convert(input);await title.fill(article.title);
  const editor=page.locator('[contenteditable="true"].public-DraftEditor-content,[contenteditable="true"].Editable,[contenteditable="true"][role="textbox"]').first();await editor.waitFor({state:'visible'});
  // The editor's own paste handler imports the sanitized rich text; no site API or cookies are extracted.
@@ -121,11 +122,12 @@ async function prepareZhihu(page,input,paths){
    for(const file of paths)await imageInput.setInputFiles(file);
    try{await page.waitForFunction(({selector,before})=>{const el=document.querySelector(selector);return el&&el.querySelectorAll('img').length>before},{selector:'[contenteditable="true"].public-DraftEditor-content,[contenteditable="true"].Editable,[contenteditable="true"][role="textbox"]',before:beforeImages},{timeout:60000})}catch{throw new Error('知乎配图上传未完成，已保留文字草稿。');}
  }
- return {status:'ready',url:page.url(),title:article.title,bodyDigest:createHash('sha256').update(await editor.innerText()).digest('hex'),images:paths.length,account:'请核对浏览器中的知乎账号'};
+ const cover=await prepareZhihuCover(page,coverPath);
+ return {status:'ready',url:page.url(),title:article.title,bodyDigest:createHash('sha256').update(await editor.innerText()).digest('hex'),images:paths.length,cover,account:'请核对浏览器中的知乎账号'};
 }
 export async function preparePublish(input){
- const platforms=selection(input.platforms);if(input.xMode&&!['thread','article'].includes(input.xMode))throw new Error('请选择 X 文章或推文串。');const article=convert(input);let paths=[];
- if(input.imageJobId){if(!/^[a-f0-9-]{36}$/.test(input.imageJobId))throw new Error('无效配图任务。');const job=JSON.parse(await readFile(join(root,'output',input.imageJobId+'.json'),'utf8'));if(job.status!=='done')throw new Error('请等本地配图完成后再准备发布。');paths=job.images.map(im=>join(root,'output',im.file));}
+ const platforms=selection(input.platforms);if(input.xMode&&!['thread','article'].includes(input.xMode))throw new Error('请选择 X 文章或推文串。');const article=convert(input);let paths=[],coverPath;
+ if(input.imageJobId){if(!/^[a-f0-9-]{36}$/.test(input.imageJobId))throw new Error('无效配图任务。');const job=JSON.parse(await readFile(join(root,'output',input.imageJobId+'.json'),'utf8'));if(job.status!=='done')throw new Error('请等本地配图完成后再准备发布。');paths=job.images.map(im=>join(root,'output',im.file));const cover=job.images.find(isCoverImage);if(cover)coverPath=join(root,'output',cover.file);}
  const id=randomUUID();const seen=new Set(paths.map(v=>v));
  for(const [i,m] of [...input.markdown.matchAll(/!\[[^\]]*\]\((data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+))\)/g)].entries()){
   const data=Buffer.from(m[3],'base64');if(data.length>8000000)throw new Error('原文图片超过 8 MB。');
@@ -134,7 +136,7 @@ export async function preparePublish(input){
  }
  const run={id,nonce:randomUUID(),status:'preparing',title:article.title,platforms,results:{},pages:{},message:'正在准备发布草稿…',digest:createHash('sha256').update(JSON.stringify({markdown:input.markdown,xPosts:input.xPosts,xMode:input.xMode,platforms,paths})).digest('hex')};runs.set(id,run);await save(run);
  for(const platform of platforms){
-  try{const page=await tab(platform);run.pages[platform]=page;await page.goto(platform==='x'&&input.xMode==='article'?'https://x.com/compose/articles':platformURL[platform],{waitUntil:'domcontentloaded',timeout:45000});run.results[platform]=platform==='x'?(input.xMode==='article'?await prepareXArticle(page,input,paths):await prepareX(page,input,paths)):await prepareZhihu(page,input,paths);}
+  try{if(platform==='zhihu'&&!coverPath)throw new Error('知乎缺少本地生成封面，请先生成封面后重新准备。');const page=await tab(platform);run.pages[platform]=page;await page.goto(platform==='x'&&input.xMode==='article'?'https://x.com/compose/articles':platformURL[platform],{waitUntil:'domcontentloaded',timeout:45000});run.results[platform]=platform==='x'?(input.xMode==='article'?await prepareXArticle(page,input,paths):await prepareX(page,input,paths)):await prepareZhihu(page,input,paths,coverPath);}
   catch(e){run.results[platform]={status:'blocked',error:e.message.split('\n')[0],url:run.pages[platform]?.url()};}
   await save(run);
  }
@@ -151,7 +153,7 @@ export async function publishCommit({id,nonce}){
     const button=isArticle?page.getByRole('button',{name:/^(Publish|发布|发布文章)$/i}).first():platform==='x'?page.locator('[role="dialog"],[data-testid="sheetDialog"]').last().locator('[data-testid="tweetButton"],[data-testid="tweetButtonInline"]').first():page.getByRole('button',{name:/^发布文章$|^发布$/}).first();
     await button.waitFor({state:'visible'});
     if(!await button.isEnabled())throw new Error('发布按钮不可用，请检查内容或图片上传状态。');
-    if(platform==='zhihu'){const currentTitle=await page.locator('textarea[placeholder*="标题"],input[placeholder*="标题"]').first().inputValue();const text=await page.locator('[contenteditable="true"].public-DraftEditor-content,[contenteditable="true"].Editable,[contenteditable="true"][role="textbox"]').first().innerText();if(currentTitle!==run.title||createHash('sha256').update(text).digest('hex')!==run.results[platform].bodyDigest)throw new Error('知乎草稿已变动，请重新准备后确认。');}
+    if(platform==='zhihu'){if(run.results[platform].cover?.status!=='ready'||await zhihuCoverSource(page)!==run.results[platform].cover.src)throw new Error('知乎封面已变动或丢失，请重新准备后确认。');const currentTitle=await page.locator('textarea[placeholder*="标题"],input[placeholder*="标题"]').first().inputValue();const text=await page.locator('[contenteditable="true"].public-DraftEditor-content,[contenteditable="true"].Editable,[contenteditable="true"][role="textbox"]').first().innerText();if(currentTitle!==run.title||createHash('sha256').update(text).digest('hex')!==run.results[platform].bodyDigest)throw new Error('知乎草稿已变动，请重新准备后确认。');}
     if(isArticle){const f=await articleFields(page);if(await titleValue(f.title)!==run.title||createHash('sha256').update(await f.body.innerText()).digest('hex')!==run.results[platform].bodyDigest)throw new Error('X 文章草稿已变动，请重新准备后确认。');}
     if(platform==='x' && !isArticle && JSON.stringify(await page.locator('[role="dialog"],[data-testid="sheetDialog"]').last().locator('[contenteditable="true"][data-testid^="tweetTextarea_"]').evaluateAll(elements=>elements.map(el=>el.innerText)))!==JSON.stringify(run.results[platform].posts))throw new Error('X 草稿已变动，请重新准备后确认。');
     const receipts=[];const pending=new Set();
