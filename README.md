@@ -1,3 +1,5 @@
+**简体中文** | [English](README.en.md)
+
 <div align="center">
 <img src="icon.svg" width="72" alt="文章分享图标">
 
