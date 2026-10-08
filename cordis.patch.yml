@@ -1,0 +1,3 @@
+- insert:
+    - id: article-share
+      name: '@local/article-share'

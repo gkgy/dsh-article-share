@@ -1,0 +1,7 @@
+node_modules/
+.publish-profile/
+output/
+.env
+.env.*
+.DS_Store
+*.log
